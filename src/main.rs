@@ -1,47 +1,67 @@
-use std::time::Duration;
-use spectrum_analyzer::{samples_fft_to_spectrum, FrequencyLimit};
+use audio_visualizer::dynamic::live_input::{list_input_devs, AudioDevAndCfg};
+use audio_visualizer::dynamic::window_top_btm::{
+    open_window_connect_audio, TransformFn
+};
+use clap::Parser;
+use cpal::Device;
+use cpal::traits::DeviceTrait;
+use spectrum_analyzer::{
+    samples_fft_to_spectrum, FrequencyLimit
+};
 use spectrum_analyzer::windows::hann_window;
 use spectrum_analyzer::scaling::divide_by_N_sqrt;
-use cpal::traits::HostTrait;
-use cpal::traits::{DeviceTrait, StreamTrait};
+
+#[derive(Parser)]
+#[clap(author="Anne Isabelle Macedo", version, about)]
+/// A toolbox for voice feminization
+struct Arguments {
+    #[clap(long)]
+    /// the input device to use
+    device: Option<i32>,
+}
+
+fn create_spectrum_fn() -> fn(&[f32], f32) -> Vec<f32> {
+    move | data: &[f32], sampling_rate | {
+        let sample_start = data.len() - 2048;
+        let hann_window = hann_window(
+            &data[sample_start..sample_start + 2048]
+        );
+        samples_fft_to_spectrum(
+            &hann_window,
+            sampling_rate as u32,
+            FrequencyLimit::Range(165.0, 255.0),
+            Some(&divide_by_N_sqrt)
+        ).unwrap().data().iter().map(|freq| freq.0.val()).collect()
+    }
+}
 
 fn main() {
-    let host = cpal::default_host();
-    let devices = host.devices()
-                      .expect("can't open devices")
-                      .map(|dev| println!("device {}", dev.name().expect("")));
-    let device = host.default_input_device().expect("couldn't get device");
-    let config = device.default_input_config().expect("couldn't get config");
-    let input_config = device.default_input_config()
-                             .expect("failed to get default input config");
-    let err_fn = |err| eprintln!("error: {}", err);
-    println!(
-        "using device {} with input config {:?}", device.name().expect(""),
-        input_config
+    let args = Arguments::parse();
+    let chosen_dev_index = args.device.unwrap_or_else(|| -1);
+    let devs = list_input_devs();
+    if chosen_dev_index < 0 {
+        devs.iter().enumerate().for_each(
+            |(i, dev)| println!("device: {i}, {}", dev.0)
+        );
+        eprintln!("choose one of those input devices!");
+        std::process::exit(1);
+    }
+    let dev: Device = devs.into_iter()
+                  .enumerate()
+                  .filter(|i| i.0 as i32 == chosen_dev_index)
+                  .map(|(_, dev)| dev.1)
+                  .next()
+                  .expect("");
+    println!("chosen device: {}", dev.name().expect(""));
+    open_window_connect_audio(
+        "voice fem tools",
+        None,
+        None,
+        Some(0.0..22050.0),
+        Some(0.0..500.0),
+        "x-axis",
+        "y-axis",
+        AudioDevAndCfg::new(Some(dev), None),
+        TransformFn::Basic(create_spectrum_fn()),
     );
-    std::thread::sleep(Duration::from_secs(10));
-    let input_stream = device.build_input_stream(
-        &input_config.config(),
-        // TODO move this to a function somewhere else
-        move |data: &[f32], _: &cpal::InputCallbackInfo | {
-            let sample_start = data.len() - 2048;
-            let hann_window = hann_window(
-                &data[sample_start..sample_start + 2048]
-            );
-            let spectrum_hann_window = samples_fft_to_spectrum(
-                &hann_window,
-                config.sample_rate().0,
-                FrequencyLimit::Range(165.0, 255.0),
-                Some(&divide_by_N_sqrt)
-            ).unwrap();
-
-            for (fr, fr_val) in spectrum_hann_window.data().iter() {
-                println!("{}Hz -> {}", fr, fr_val);
-            }
-        },
-        err_fn,
-        None
-    ).expect("couldn't create input stream");
-    let _ = input_stream.play().expect("couldn't play stream");
-    std::thread::sleep(Duration::from_secs(10));
 }
