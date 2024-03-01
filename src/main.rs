@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use audio_visualizer::dynamic::live_input::{list_input_devs, AudioDevAndCfg};
 use audio_visualizer::dynamic::window_top_btm::{
     open_window_connect_audio, TransformFn
@@ -9,7 +11,7 @@ use spectrum_analyzer::{
     samples_fft_to_spectrum, FrequencyLimit
 };
 use spectrum_analyzer::windows::hann_window;
-use spectrum_analyzer::scaling::divide_by_N_sqrt;
+use spectrum_analyzer::scaling::divide_by_N;
 
 #[derive(Parser)]
 #[clap(author="Anne Isabelle Macedo", version, about)]
@@ -20,8 +22,8 @@ struct Arguments {
     device: Option<i32>,
 }
 
-fn create_spectrum_fn() -> fn(&[f32], f32) -> Vec<f32> {
-    move | data: &[f32], sampling_rate | {
+fn create_spectrum_fn() -> Box<(dyn Fn(&[f32], f32) -> Vec<(f64, f64)> + 'static)> {
+    Box::new(move | data: &[f32], sampling_rate | {
         let sample_start = data.len() - 2048;
         let hann_window = hann_window(
             &data[sample_start..sample_start + 2048]
@@ -30,9 +32,9 @@ fn create_spectrum_fn() -> fn(&[f32], f32) -> Vec<f32> {
             &hann_window,
             sampling_rate as u32,
             FrequencyLimit::Range(165.0, 255.0),
-            Some(&divide_by_N_sqrt)
-        ).unwrap().data().iter().map(|freq| freq.0.val()).collect()
-    }
+            Some(&divide_by_N)
+        ).unwrap().data().iter().map(|freq| {println!("freq: {} : {}", freq.0.val(), freq.1.val()); (freq.0.val() as f64, freq.1.val() as f64)}).collect()
+    })
 }
 
 fn main() {
@@ -57,11 +59,11 @@ fn main() {
         "voice fem tools",
         None,
         None,
-        Some(0.0..22050.0),
-        Some(0.0..500.0),
-        "x-axis",
-        "y-axis",
+        Some(0.0..15.0),
+        Some(0.0..15.0),
+        "frequency",
+        "amplitude",
         AudioDevAndCfg::new(Some(dev), None),
-        TransformFn::Basic(create_spectrum_fn()),
+        TransformFn::Complex(&create_spectrum_fn()),
     );
 }
