@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::cmp::max;
 
 use audio_visualizer::dynamic::live_input::{list_input_devs, AudioDevAndCfg};
 use audio_visualizer::dynamic::window_top_btm::{
@@ -8,7 +9,7 @@ use clap::Parser;
 use cpal::Device;
 use cpal::traits::DeviceTrait;
 use spectrum_analyzer::{
-    samples_fft_to_spectrum, FrequencyLimit
+    samples_fft_to_spectrum, FrequencyLimit, FrequencyValue
 };
 use spectrum_analyzer::windows::hann_window;
 use spectrum_analyzer::scaling::divide_by_N;
@@ -23,6 +24,7 @@ struct Arguments {
 }
 
 fn create_spectrum_fn() -> Box<(dyn Fn(&[f32], f32) -> Vec<(f64, f64)> + 'static)> {
+    let visualize_spectrum: RefCell<Vec<(f64, f64)>> = RefCell::new(vec![(0.0, 0.0); 1024]);
     Box::new(move | data: &[f32], sampling_rate | {
         let sample_start = data.len() - 2048;
         let hann_window = hann_window(
@@ -31,9 +33,23 @@ fn create_spectrum_fn() -> Box<(dyn Fn(&[f32], f32) -> Vec<(f64, f64)> + 'static
         samples_fft_to_spectrum(
             &hann_window,
             sampling_rate as u32,
-            FrequencyLimit::Range(165.0, 255.0),
+            FrequencyLimit::All,
             Some(&divide_by_N)
-        ).unwrap().data().iter().map(|freq| {println!("freq: {} : {}", freq.0.val(), freq.1.val()); (freq.0.val() as f64, freq.1.val() as f64)}).collect()
+        ).unwrap()
+         .data()
+         .iter()
+         .zip(visualize_spectrum.borrow_mut().iter_mut())
+         .for_each(|((fr_new, fr_val_new), (fr_old, fr_val_old))| {
+             // actually only required in very first iteration
+             *fr_old = fr_new.val() as f64;
+             let old_val = *fr_val_old * 0.84;
+             let max = max(
+                 *fr_val_new * 5000.0_f32.into(),
+                 FrequencyValue::from(old_val as f32),
+             );
+             *fr_val_old = max.val() as f64;
+         });
+        visualize_spectrum.borrow().clone()
     })
 }
 
@@ -59,8 +75,8 @@ fn main() {
         "voice fem tools",
         None,
         None,
-        Some(0.0..15.0),
-        Some(0.0..15.0),
+        Some(0.0..5000.0),
+        Some(0.0..10.0),
         "frequency",
         "amplitude",
         AudioDevAndCfg::new(Some(dev), None),
